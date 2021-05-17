@@ -10,8 +10,8 @@
  *   Red Hat, Inc. - initial API and implementation
  */
 
+import axios from 'axios';
 import { Action, Reducer } from 'redux';
-import { fetchBranding } from '../../services/assets/branding';
 import { AppThunk } from '..';
 import { merge } from 'lodash';
 import { BRANDING_DEFAULT, BrandingData } from '../../services/bootstrap/branding.constant';
@@ -42,7 +42,7 @@ export interface ReceivedBrandingErrorAction {
   error: string;
 }
 
-type KnownAction =
+export type KnownAction =
   RequestBrandingAction
   | ReceivedBrandingAction
   | ReceivedBrandingErrorAction;
@@ -64,7 +64,8 @@ export const actionCreators: ActionCreators = {
       });
 
       try {
-        const receivedBranding = await fetchBranding(url);
+        const response = await axios.get<BrandingData>(url);
+        const receivedBranding = response.data;
         const branding = getBrandingData(receivedBranding);
         const productVersion = await cheWorkspaceClient.restApiClient.getApiInfo();
 

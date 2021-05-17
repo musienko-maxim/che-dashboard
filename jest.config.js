@@ -42,6 +42,8 @@ module.exports = {
   ],
   coverageDirectory: './coverage',
   coverageReporters: [
+    'clover',
+    'cobertura',
     'html',
     'lcov',
     'text-summary',
