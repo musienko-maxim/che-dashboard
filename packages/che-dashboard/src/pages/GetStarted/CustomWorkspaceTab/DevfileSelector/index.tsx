@@ -80,7 +80,7 @@ export class DevfileSelectorFormGroup extends React.PureComponent<Props, State> 
     this.devfileLocationRef.current?.clearInput();
     try {
       const devfileContent = await this.props.requestDevfile(meta.links.self) as string;
-      const devfile = safeLoad(devfileContent);
+      const devfile = safeLoad(devfileContent) as che.WorkspaceDevfile;
       this.props.onDevfile(devfile);
     } catch (e) {
       this.showAlert({
