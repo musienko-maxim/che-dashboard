@@ -10,7 +10,7 @@
  *   Red Hat, Inc. - initial API and implementation
  */
 
-import { IDevWorkspaceDevfile } from '@eclipse-che/devworkspace-client';
+import { IDevfile } from '@eclipse-che/devworkspace-client';
 import { safeDump } from 'js-yaml';
 import { LanguageConfiguration, IMonarchLanguage } from 'monaco-editor-core/esm/vs/editor/editor.main';
 
@@ -50,7 +50,7 @@ function sortKeys(key1: keyof che.WorkspaceDevfile, key2: keyof che.WorkspaceDev
 /**
  * Provides a devfile stringify function.
  */
-export default function stringify(devfile: che.WorkspaceDevfile | IDevWorkspaceDevfile): string {
+export default function stringify(devfile: che.WorkspaceDevfile | IDevfile): string {
   if (!devfile) {
     return '';
   }

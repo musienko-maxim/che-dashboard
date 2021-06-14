@@ -12,6 +12,7 @@
 
 import React from 'react';
 import { connect, ConnectedProps } from 'react-redux';
+import { V1alpha2DevWorkspace } from '@devfile/api';
 import { AppState } from '../../store';
 import { DisposableCollection } from '../../services/helpers/disposable';
 import { ProtocolToMonacoConverter, MonacoToProtocolConverter } from 'monaco-languageclient/lib/monaco-converter';
@@ -20,11 +21,9 @@ import { TextDocument, getLanguageService } from 'yaml-language-server';
 import { initDefaultEditorTheme } from '../../services/monacoThemeRegister';
 import stringify, { language, conf } from '../../services/helpers/editor';
 import $ from 'jquery';
-import { IDevWorkspaceDevfile } from '@eclipse-che/devworkspace-client';
 import { selectDevfileSchema } from '../../store/DevfileRegistries/selectors';
 import { selectPlugins } from '../../store/Plugins/chePlugins/selectors';
 import { selectBranding } from '../../store/Branding/selectors';
-
 import './DevfileEditor.styl';
 
 interface Editor {
@@ -46,7 +45,7 @@ const MONACO_CONFIG = {
 type Props =
   MappedProps
   & {
-    devfile: che.WorkspaceDevfile | IDevWorkspaceDevfile;
+    devfile: che.WorkspaceDevfile | V1alpha2DevWorkspace;
     decorationPattern?: string;
     onChange: (newValue: string, isValid: boolean) => void;
     isReadonly?: boolean;
@@ -147,7 +146,7 @@ export class DevfileEditor extends React.PureComponent<Props, State> {
     this.yamlService.configure({ validate: true, schemas, hover: true, completion: true });
   }
 
-  public updateContent(devfile: che.WorkspaceDevfile | IDevWorkspaceDevfile): void {
+  public updateContent(devfile: che.WorkspaceDevfile | V1alpha2DevWorkspace): void {
     if (!this.editor) {
       return;
     }

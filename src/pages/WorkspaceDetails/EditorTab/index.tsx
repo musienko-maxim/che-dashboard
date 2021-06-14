@@ -25,7 +25,7 @@ import {
 import DevfileEditor, { DevfileEditor as Editor } from '../../../components/DevfileEditor';
 import EditorTools from './EditorTools';
 import { convertWorkspace, isDevfileV2, isWorkspaceV1, isWorkspaceV2, Workspace } from '../../../services/workspaceAdapter';
-import { IDevWorkspace, IDevWorkspaceDevfile } from '@eclipse-che/devworkspace-client';
+import { IDevfile } from '@eclipse-che/devworkspace-client';
 import { DevWorkspaceStatus } from '../../../services/helpers/types';
 import { DevWorkspaceClient, DEVWORKSPACE_NEXT_START_ANNOTATION } from '../../../services/workspace-client/devWorkspaceClient';
 import { container } from '../../../inversify.config';
@@ -33,6 +33,7 @@ import * as lodash from 'lodash';
 
 import './EditorTab.styl';
 import { safeLoad } from 'js-yaml';
+import { V1alpha2DevWorkspace, V1alpha2DevWorkspaceSpec } from '@devfile/api';
 
 type Props = {
   onSave: (workspace: Workspace) => Promise<void>;
@@ -41,7 +42,7 @@ type Props = {
 };
 
 type State = {
-  devfile: che.WorkspaceDevfile | IDevWorkspaceDevfile;
+  devfile: che.WorkspaceDevfile | IDevfile;
   hasChanges: boolean;
   hasRequestErrors: boolean;
   currentRequestError: string;
@@ -52,7 +53,7 @@ type State = {
 };
 
 export class EditorTab extends React.PureComponent<Props, State> {
-  private originDevfile: che.WorkspaceDevfile | IDevWorkspaceDevfile;
+  private originDevfile: che.WorkspaceDevfile | IDevfile;
   private readonly devfileEditorRef: React.RefObject<Editor>;
   private devworkspaceClient: DevWorkspaceClient;
 
@@ -183,12 +184,16 @@ export class EditorTab extends React.PureComponent<Props, State> {
     }
     try {
       await this.checkForModifiedClusterDevWorkspace();
-      const devworkspace = this.props.workspace.ref as IDevWorkspace;
+      const devworkspace = this.props.workspace.ref as V1alpha2DevWorkspace;
       const convertedDevWorkspace = convertWorkspace(this.props.workspace.ref);
       convertedDevWorkspace.devfile = devfile;
       // Store the devfile in here
-      (convertedDevWorkspace.ref as IDevWorkspace).metadata.annotations = {
-        [DEVWORKSPACE_NEXT_START_ANNOTATION]: JSON.stringify((convertedDevWorkspace.ref as IDevWorkspace)),
+      const convertedDW = convertedDevWorkspace.ref as V1alpha2DevWorkspace;
+      if (!convertedDW.metadata) {
+        convertedDW.metadata = {} as any;
+      }
+      (convertedDW.metadata as any).annotations = {
+        [DEVWORKSPACE_NEXT_START_ANNOTATION]: JSON.stringify((convertedDevWorkspace.ref as V1alpha2DevWorkspace)),
       };
       convertedDevWorkspace.ref.status = devworkspace.status;
       this.props.onDevWorkspaceWarning();
@@ -205,7 +210,7 @@ export class EditorTab extends React.PureComponent<Props, State> {
     }
   }
 
-  private updateEditor(devfile: che.WorkspaceDevfile | IDevWorkspaceDevfile): void {
+  private updateEditor(devfile: che.WorkspaceDevfile | IDevfile): void {
     if (!devfile) {
       return;
     }
@@ -253,9 +258,10 @@ export class EditorTab extends React.PureComponent<Props, State> {
    * @param workspace The Currne
    */
   private async checkForModifiedClusterDevWorkspace(): Promise<void> {
-    const currentDevWorkspace = this.props.workspace.ref as IDevWorkspace;
-    const clusterDevWorkspace = await this.devworkspaceClient.getWorkspaceByName(currentDevWorkspace.metadata.namespace, currentDevWorkspace.metadata.name);
-    if (!lodash.isEqual(clusterDevWorkspace.spec.template, currentDevWorkspace.spec.template)) {
+    const currentDevWorkspace = this.props.workspace.ref as V1alpha2DevWorkspace;
+    const dwMeta = currentDevWorkspace.metadata as any;
+    const clusterDevWorkspace = await this.devworkspaceClient.getWorkspaceByName(dwMeta.namespace, dwMeta.name);
+    if (!lodash.isEqual(clusterDevWorkspace.spec?.template, currentDevWorkspace.spec?.template)) {
       throw new Error('Could not save devfile to cluster. The clusters devfile and the incoming devfile are different. Please reload the page to get an updated devfile.');
     }
   }
@@ -273,7 +279,7 @@ export class EditorTab extends React.PureComponent<Props, State> {
       if (isWorkspaceV2(workspaceCopy.ref)) {
         await this.checkForModifiedClusterDevWorkspace();
         // We need to manually re-attach devworkspace id so that we can re-use it to re-add default plugins to the devworkspace custom resource
-        const dw = this.props.workspace.ref as IDevWorkspace;
+        const dw = this.props.workspace.ref as V1alpha2DevWorkspace;
         workspaceCopy.ref.status = dw.status;
       }
 
@@ -291,14 +297,14 @@ export class EditorTab extends React.PureComponent<Props, State> {
     });
   }
 
-  private sortKeysInObject(obj: che.WorkspaceDevfile | IDevWorkspaceDevfile): che.WorkspaceDevfile | IDevWorkspaceDevfile {
-    return Object.keys(obj).sort().reduce((result: che.WorkspaceDevfile | IDevWorkspaceDevfile, key: string) => {
+  private sortKeysInObject(obj: che.WorkspaceDevfile | IDevfile): che.WorkspaceDevfile | V1alpha2DevWorkspace {
+    return Object.keys(obj).sort().reduce((result: che.WorkspaceDevfile | IDevfile, key: string) => {
       result[key] = obj[key];
       return result;
-    }, {} as che.WorkspaceDevfile | IDevWorkspaceDevfile);
+    }, {} as che.WorkspaceDevfile | IDevfile);
   }
 
-  private areEqual(a: che.WorkspaceDevfile | IDevWorkspaceDevfile, b: che.WorkspaceDevfile | IDevWorkspaceDevfile): boolean {
+  private areEqual(a: che.WorkspaceDevfile | IDevfile, b: che.WorkspaceDevfile | IDevfile): boolean {
     return JSON.stringify(this.sortKeysInObject(a)) == JSON.stringify(this.sortKeysInObject(b as che.WorkspaceDevfile));
   }
 }

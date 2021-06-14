@@ -13,7 +13,8 @@
 import { inject, injectable } from 'inversify';
 import { isWebTerminal } from '../helpers/devworkspace';
 import { WorkspaceClient } from './';
-import { RestApi as DevWorkspaceRestApi, IDevWorkspaceApi, IDevWorkspaceDevfile, IDevWorkspace, IDevWorkspaceTemplateApi, IDevWorkspaceTemplate, devWorkspaceApiGroup, devworkspaceSingularSubresource, devworkspaceVersion, ICheApi, Patch } from '@eclipse-che/devworkspace-client';
+
+import { RestApi as DevWorkspaceRestApi, IDevWorkspaceApi, devfileToDevWorkspace, IDevWorkspaceTemplateApi, devWorkspaceApiGroup, devworkspaceSingularSubresource, devworkspaceVersion, ICheApi, Patch, IDevfile } from '@eclipse-che/devworkspace-client';
 import { DevWorkspaceStatus } from '../helpers/types';
 import { KeycloakSetupService } from '../keycloak/setup';
 import { delay } from '../helpers/delay';
@@ -22,7 +23,7 @@ import { ThunkDispatch } from 'redux-thunk';
 import { State } from '../../store/Workspaces/devWorkspaces';
 import { Action } from 'redux';
 import { AppState, AppThunk } from '../../store';
-import { V1alpha2DevWorkspace, V1alpha2DevWorkspaceTemplate, V1alpha2DevWorkspaceSpecTemplate } from '@devfile/api';
+import { V1alpha2DevWorkspace, V1alpha2DevWorkspaceTemplate, V1alpha2DevWorkspaceSpecTemplate, V1alpha2DevWorkspaceSpec } from '@devfile/api';
 import { InversifyBinding } from '@eclipse-che/che-theia-devworkspace-handler/lib/inversify/inversify-binding';
 import { CheTheiaPluginsDevfileResolver } from '@eclipse-che/che-theia-devworkspace-handler/lib/devfile/che-theia-plugins-devfile-resolver';
 import { SidecarPolicy } from '@eclipse-che/che-theia-devworkspace-handler/lib/api/devfile-context';
@@ -73,10 +74,10 @@ export class DevWorkspaceClient extends WorkspaceClient {
     return this.client.isDevWorkspaceApiEnabled();
   }
 
-  async getAllWorkspaces(defaultNamespace: string): Promise<IDevWorkspace[]> {
+  async getAllWorkspaces(defaultNamespace: string): Promise<V1alpha2DevWorkspace[]> {
     await this.initializing;
     const workspaces = await this.dwApi.listInNamespace(defaultNamespace);
-    const availableWorkspaces: IDevWorkspace[] = [];
+    const availableWorkspaces: V1alpha2DevWorkspace[] = [];
     for (const workspace of workspaces) {
       if (!isWebTerminal(workspace)) {
         availableWorkspaces.push(workspace);
@@ -85,7 +86,7 @@ export class DevWorkspaceClient extends WorkspaceClient {
     return availableWorkspaces;
   }
 
-  async getWorkspaceByName(namespace: string, workspaceName: string): Promise<IDevWorkspace> {
+  async getWorkspaceByName(namespace: string, workspaceName: string): Promise<V1alpha2DevWorkspace> {
     let workspace = await this.dwApi.getByName(namespace, workspaceName);
     let attempted = 0;
     while ((!workspace.status || !workspace.status.phase || !workspace.status.mainUrl) && attempted < this.maxStatusAttempts) {
@@ -104,17 +105,18 @@ export class DevWorkspaceClient extends WorkspaceClient {
     return workspace;
   }
 
-  async create(devfile: IDevWorkspaceDevfile, pluginsDevfile: IDevWorkspaceDevfile[], pluginRegistryUrl: string | undefined, optionalFilesContent: {
+  async create(devfile: IDevfile, pluginsDevfile: IDevfile[], pluginRegistryUrl: string | undefined, optionalFilesContent: {
     [fileName: string]: string
-  },): Promise<IDevWorkspace> {
+  },): Promise<V1alpha2DevWorkspace> {
     if (!devfile.components) {
       devfile.components = [];
     }
 
-    const createdWorkspace = await this.dwApi.create(devfile, 'che', false);
-    const namespace = createdWorkspace.metadata.namespace;
-    const name = createdWorkspace.metadata.name;
-    const workspaceId = createdWorkspace.status.devworkspaceId;
+    const createdWorkspace = await this.dwApi.create(devfileToDevWorkspace(devfile, 'che', false));
+    const createdDwMeta = createdWorkspace.metadata as any;
+    const namespace = createdDwMeta?.namespace;
+    const name = createdDwMeta?.name;
+    const workspaceId = createdWorkspace.status?.devworkspaceId || '';
 
     const devfileGroupVersion = `${devWorkspaceApiGroup}/${devworkspaceVersion}`;
     const devWorkspaceTemplates: V1alpha2DevWorkspaceTemplate[] = [];
@@ -123,19 +125,24 @@ export class DevWorkspaceClient extends WorkspaceClient {
       const pluginName = this.normalizePluginName(pluginDevfile.metadata.name, workspaceId);
 
       // propagate the plugin registry and dashboard urls to the containers in the initial devworkspace templates
-      for (const component of pluginDevfile.components) {
-        const container = component.container;
-        if (container) {
-          if (!container.env) {
-            container.env = [];
+      if (pluginDevfile.components) {
+        for (const component of pluginDevfile.components) {
+          const container = component.container;
+          if (container) {
+            if (!container.env) {
+              container.env = [];
+            }
+            container.env.push(...[{
+              name: this.dashboardUrlEnvName,
+              value: window.location.origin,
+            }]);
+            if (pluginRegistryUrl) {
+              container.env.push(...[{
+                name: this.pluginRegistryUrlEnvName,
+                value: pluginRegistryUrl
+              }]);
+            }
           }
-          container.env.push(...[{
-            name: this.dashboardUrlEnvName,
-            value: window.location.origin,
-          }, {
-            name: this.pluginRegistryUrlEnvName,
-            value: pluginRegistryUrl
-          }]);
         }
       }
 
@@ -196,15 +203,18 @@ export class DevWorkspaceClient extends WorkspaceClient {
         {
           apiVersion: devfileGroupVersion,
           kind: devworkspaceSingularSubresource,
-          name: createdWorkspace.metadata.name,
-          uid: createdWorkspace.metadata.uid
+          name: name,
+          uid: createdDwMeta.uid
         }
       ];
 
-      const pluginDWT = await this.dwtApi.create(<IDevWorkspaceTemplate>template);
-      this.addPlugin(createdWorkspace, pluginDWT.metadata.name, pluginDWT.metadata.namespace);
+      const pluginDWT = await this.dwtApi.create(<V1alpha2DevWorkspaceTemplate>template);
+      const dwtMeta = pluginDWT.metadata as any;
+      this.addPlugin(createdWorkspace, dwtMeta.name, dwtMeta.namespace);
     }));
-
+    if (!createdWorkspace.spec) {
+      createdWorkspace.spec = {} as V1alpha2DevWorkspaceSpec;
+    }
     createdWorkspace.spec.started = true;
     const patch = [
       {
@@ -227,19 +237,20 @@ export class DevWorkspaceClient extends WorkspaceClient {
    * @param workspace The DevWorkspace you want to update
    * @param plugins The plugins you want to inject into the devworkspace
    */
-  async update(workspace: IDevWorkspace, plugins: IDevWorkspaceDevfile[]): Promise<IDevWorkspace> {
+  async update(workspace: V1alpha2DevWorkspace, plugins: IDevfile[]): Promise<V1alpha2DevWorkspace> {
+    const wsMeta = workspace.metadata as any;
     // Take the devworkspace with no plugins and then inject them
     for (const plugin of plugins) {
-      const pluginName = this.normalizePluginName(plugin.metadata.name, workspace.status.devworkspaceId);
-      this.addPlugin(workspace, pluginName, workspace.metadata.namespace);
+      const pluginName = this.normalizePluginName(plugin.metadata.name, workspace.status?.devworkspaceId || '');
+      this.addPlugin(workspace, pluginName, wsMeta.namespace);
     }
 
-    const namespace = workspace.metadata.namespace;
-    const name = workspace.metadata.name;
+    const namespace = wsMeta.namespace;
+    const name = wsMeta.name;
 
     const patch: Patch[] = [];
 
-    if (workspace.metadata.annotations && workspace.metadata.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]) {
+    if (wsMeta.annotations && wsMeta.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]) {
 
       /**
        * This is the case when you are annotating a devworkspace and will restart it later
@@ -249,7 +260,7 @@ export class DevWorkspaceClient extends WorkspaceClient {
           op: 'add',
           path: '/metadata/annotations',
           value: {
-            [DEVWORKSPACE_NEXT_START_ANNOTATION]: workspace.metadata.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]
+            [DEVWORKSPACE_NEXT_START_ANNOTATION]: wsMeta.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]
           }
         },
 
@@ -266,9 +277,10 @@ export class DevWorkspaceClient extends WorkspaceClient {
         }
       );
       const onClusterWorkspace = await this.getWorkspaceByName(namespace, name);
+      const onClusterMeta = onClusterWorkspace.metadata as any;
 
       // If the workspace currently has DEVWORKSPACE_NEXT_START_ANNOTATION then delete it since we are starting a devworkspace normally
-      if (onClusterWorkspace.metadata.annotations && onClusterWorkspace.metadata.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]) {
+      if (onClusterMeta.annotations && onClusterMeta.annotations[DEVWORKSPACE_NEXT_START_ANNOTATION]) {
         // We have to escape the slash when removing the annotation and ~1 is used as the escape character https://tools.ietf.org/html/rfc6902#appendix-A.14
         const escapedAnnotation = DEVWORKSPACE_NEXT_START_ANNOTATION.replace('/', '~1');
         patch.push(
@@ -297,7 +309,7 @@ export class DevWorkspaceClient extends WorkspaceClient {
     await this.dwApi.delete(namespace, name);
   }
 
-  async changeWorkspaceStatus(namespace: string, name: string, started: boolean): Promise<IDevWorkspace> {
+  async changeWorkspaceStatus(namespace: string, name: string, started: boolean): Promise<V1alpha2DevWorkspace> {
     const changedWorkspace = await this.dwApi.changeStatus(namespace, name, started);
     if (!started && changedWorkspace.status?.devworkspaceId) {
       this.lastDevWorkspaceLog.delete(changedWorkspace.status.devworkspaceId);
@@ -311,7 +323,13 @@ export class DevWorkspaceClient extends WorkspaceClient {
    * @param workspace A devworkspace
    * @param pluginName The name of the plugin
    */
-  private addPlugin(workspace: IDevWorkspace, pluginName: string, namespace: string) {
+  private addPlugin(workspace: V1alpha2DevWorkspace, pluginName: string, namespace: string) {
+    if (!workspace.spec) {
+      workspace.spec = {} as V1alpha2DevWorkspaceSpec;
+    }
+    if (!workspace.spec.template) {
+      workspace.spec.template = {} as V1alpha2DevWorkspaceSpecTemplate;
+    }
     if (!workspace.spec.template.components) {
       workspace.spec.template.components = [];
     }
@@ -344,9 +362,9 @@ export class DevWorkspaceClient extends WorkspaceClient {
   subscribeToNamespace(
     defaultNamespace: string,
     callbacks: {
-      updateDevWorkspaceStatus: (workspace: IDevWorkspace, message: IStatusUpdate) => AppThunk<Action, void>,
+      updateDevWorkspaceStatus: (workspace: V1alpha2DevWorkspace, message: IStatusUpdate) => AppThunk<Action, void>,
       updateDeletedDevWorkspaces: (deletedWorkspacesIds: string[]) => AppThunk<Action, void>,
-      updateAddedDevWorkspaces: (workspace: IDevWorkspace[]) => AppThunk<Action, void>,
+      updateAddedDevWorkspaces: (workspace: V1alpha2DevWorkspace[]) => AppThunk<Action, void>,
     },
     dispatch: ThunkDispatch<State, undefined, Action>,
     getState: () => AppState,
@@ -354,12 +372,12 @@ export class DevWorkspaceClient extends WorkspaceClient {
     setInterval(async () => {
       // This is a temporary solution until websockets work. Ideally we should just have a websocket connection here.
       const devworkspaces = await this.getAllWorkspaces(defaultNamespace);
-      devworkspaces.forEach((devworkspace: IDevWorkspace) => {
+      devworkspaces.forEach((devworkspace: V1alpha2DevWorkspace) => {
         const statusUpdate = this.createStatusUpdate(devworkspace);
 
-        const message = devworkspace.status.message;
+        const message = devworkspace.status?.message;
         if (message) {
-          const workspaceId = devworkspace.status.devworkspaceId;
+          const workspaceId = devworkspace.status?.devworkspaceId || '';
           const lastMessage = this.lastDevWorkspaceLog.get(workspaceId);
 
           // Only add new messages we haven't seen before
@@ -372,10 +390,10 @@ export class DevWorkspaceClient extends WorkspaceClient {
       });
 
       const devWorkspacesIds: string[] = [];
-      const addedDevWorkspaces: IDevWorkspace[] = [];
+      const addedDevWorkspaces: V1alpha2DevWorkspace[] = [];
       devworkspaces.forEach(workspace => {
-        devWorkspacesIds.push(workspace.status.devworkspaceId);
-        if (this.devWorkspacesIds.indexOf(workspace.status.devworkspaceId) === -1) {
+        devWorkspacesIds.push(workspace.status?.devworkspaceId || '');
+        if (this.devWorkspacesIds.indexOf(workspace.status?.devworkspaceId || '') === -1) {
           addedDevWorkspaces.push(workspace);
         }
       });
@@ -400,11 +418,11 @@ export class DevWorkspaceClient extends WorkspaceClient {
    * and the new DevWorkspace
    * @param devworkspace The incoming DevWorkspace
    */
-  private createStatusUpdate(devworkspace: IDevWorkspace): IStatusUpdate {
-    const namespace = devworkspace.metadata.namespace;
-    const workspaceId = devworkspace.status.devworkspaceId;
+  private createStatusUpdate(devworkspace: V1alpha2DevWorkspace): IStatusUpdate {
+    const namespace = (devworkspace.metadata as any)?.namespace;
+    const workspaceId = devworkspace.status?.devworkspaceId || '';
     // Starting devworkspaces don't have status defined
-    const status = typeof devworkspace.status.phase === 'string'
+    const status = typeof devworkspace.status?.phase === 'string'
       ? devworkspace.status.phase
       : DevWorkspaceStatus.STARTING;
 
@@ -433,14 +451,14 @@ export class DevWorkspaceClient extends WorkspaceClient {
     }
   }
 
-  checkForDevWorkspaceError(devworkspace: IDevWorkspace) {
+  checkForDevWorkspaceError(devworkspace: V1alpha2DevWorkspace) {
     const currentPhase = devworkspace.status?.phase;
     if (currentPhase && currentPhase === DevWorkspaceStatus.FAILED) {
-      const message = devworkspace.status.message;
+      const message = devworkspace.status?.message;
       if (message) {
-        throw new Error(devworkspace.status.message);
+        throw new Error(message);
       }
-      throw new Error('Unknown error occured when trying to process the devworkspace');
+      throw new Error('Unknown error occurred when trying to process the devworkspace');
     }
   }
 }
