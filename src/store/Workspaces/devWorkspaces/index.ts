@@ -21,11 +21,13 @@ import { CheWorkspaceClient } from '../../../services/workspace-client/cheWorksp
 import { IDevWorkspace, IDevWorkspaceDevfile } from '@eclipse-che/devworkspace-client';
 import { deleteLogs, mergeLogs } from '../logs';
 import { getErrorMessage } from '../../../services/helpers/getErrorMessage';
+import { getDefer, IDeferred } from '../../../services/helpers/deferred';
 
 const cheWorkspaceClient = container.get(CheWorkspaceClient);
 const devWorkspaceClient = container.get(DevWorkspaceClient);
 
 const devWorkspaceStatusMap = new Map<string, string | undefined>();
+const restartCallbacks = new Map<string, () => void>();
 
 export interface State {
   isLoading: boolean;
@@ -108,6 +110,7 @@ export type ActionCreators = {
   requestWorkspaces: () => AppThunk<KnownAction, Promise<void>>;
   requestWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
   startWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
+  restartWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
   stopWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
   terminateWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
   updateWorkspace: (workspace: IDevWorkspace) => AppThunk<KnownAction, Promise<void>>;
@@ -215,6 +218,30 @@ export const actionCreators: ActionCreators = {
       });
       throw errorMessage;
     }
+  },
+
+  restartWorkspace: (workspace: IDevWorkspace): AppThunk<KnownAction, Promise<void>> => async (dispatch, getState): Promise<void> => {
+    const defer: IDeferred<void> = getDefer();
+    try {
+      await devWorkspaceClient.changeWorkspaceStatus(workspace.metadata.namespace, workspace.metadata.name, false);
+      dispatch({ type: 'DELETE_DEVWORKSPACE_LOGS', workspaceId: workspace.status.devworkspaceId });
+      restartCallbacks.set(workspace.status.devworkspaceId, async () => {
+        try {
+          await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
+          defer.resolve();
+        } catch (e) {
+          defer.reject(e);
+        }
+      });
+    } catch (e) {
+      const errorMessage = `Failed to restart the workspace with ID: ${workspace.status.devworkspaceId}, reason: ` + getErrorMessage(e);
+      dispatch({
+        type: 'RECEIVE_DEVWORKSPACE_ERROR',
+        error: errorMessage,
+      });
+      defer.reject(errorMessage);
+    }
+    return defer.promise;
   },
 
   stopWorkspace: (workspace: IDevWorkspace): AppThunk<KnownAction, Promise<void>> => async (dispatch): Promise<void> => {
@@ -408,7 +435,7 @@ export const reducer: Reducer<State> = (state: State | undefined, action: KnownA
 
 };
 
-function onStatusUpdateReceived(
+async function onStatusUpdateReceived(
   workspace: IDevWorkspace,
   dispatch: ThunkDispatch<State, undefined, KnownAction>,
   statusUpdate: IStatusUpdate) {
@@ -438,6 +465,12 @@ function onStatusUpdateReceived(
       }
     }
     status = statusUpdate.status;
+    // check workspaces which should be restart
+    const callback = restartCallbacks.get(workspace.status.devworkspaceId);
+    if (callback && (status === DevWorkspaceStatus.STOPPED || status === DevWorkspaceStatus.FAILED)) {
+      restartCallbacks.delete(workspace.status.devworkspaceId);
+      callback();
+    }
   }
   if (status && status !== devWorkspaceStatusMap.get(workspace.status.devworkspaceId)) {
     devWorkspaceStatusMap.set(workspace.status.devworkspaceId, status);

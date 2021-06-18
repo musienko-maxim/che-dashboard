@@ -149,18 +149,15 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
       if (!workspace) {
         return;
       }
-      const [, workspaceId, machineToken] = event.data.split(':');
+      const [, workspaceId,] = event.data.split(':');
       if (workspace.id !== workspaceId) {
         return;
       }
       try {
-        await validateMachineToken(workspace.id, machineToken);
-        await this.props.stopWorkspace(workspace);
-        await this.props.requestWorkspace(workspace);
-        this.setState({ currentStep: LoadIdeSteps.INITIALIZING });
+        await this.props.restartWorkspace(workspace);
         window.postMessage('show-navbar', '*');
       } catch (error) {
-        console.error('Machine token validation failed. ', error);
+        this.showAlert(`Workspace ${this.state.workspaceName} failed to restart. ${error}`);
       }
     }
   }
@@ -170,6 +167,14 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
   }
 
   public async componentDidMount(): Promise<void> {
+    const listener = (event: MessageEvent) => this.handleIframeMessage(event);
+    window.addEventListener('message', listener);
+    this.toDispose.push({
+      dispose: () => {
+        window.removeEventListener('message', listener);
+      },
+    });
+
     const { isLoading, requestWorkspaces, allWorkspaces } = this.props;
     let workspace = allWorkspaces.find(workspace =>
       workspace.namespace === this.state.namespace && workspace.name === this.state.workspaceName);
@@ -184,14 +189,6 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
       this.showErrorAlert(workspace);
     }
     this.debounce.setDelay(1000);
-
-    const listener = this.handleIframeMessage;
-    window.addEventListener('message', listener, false);
-    this.toDispose.push({
-      dispose: () => {
-        window.removeEventListener('message', listener);
-      },
-    });
   }
 
   private showErrorAlert(workspace: Workspace) {

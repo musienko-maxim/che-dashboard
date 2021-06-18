@@ -21,6 +21,7 @@ import { createState } from '../../helpers';
 import { KeycloakAuthService } from '../../../services/keycloak/auth';
 import { deleteLogs, mergeLogs } from '../logs';
 import { getErrorMessage } from '../../../services/helpers/getErrorMessage';
+import { getDefer, IDeferred } from '../../../services/helpers/deferred';
 
 const cheWorkspaceClient = container.get(CheWorkspaceClient);
 const keycloakAuthService = container.get(KeycloakAuthService);
@@ -98,6 +99,7 @@ export type ActionCreators = {
   requestWorkspace: (workspace: che.Workspace) => AppThunk<KnownAction, Promise<void>>;
   startWorkspace: (workspace: che.Workspace, params?: ResourceQueryParams) => AppThunk<KnownAction, Promise<void>>;
   stopWorkspace: (workspace: che.Workspace) => AppThunk<KnownAction, Promise<void>>;
+  restartWorkspace: (workspace: che.Workspace) => AppThunk<KnownAction, Promise<void>>;
   deleteWorkspace: (workspace: che.Workspace) => AppThunk<KnownAction, Promise<void>>;
   updateWorkspace: (workspace: che.Workspace) => AppThunk<KnownAction, Promise<void>>;
   createWorkspaceFromDevfile: (
@@ -113,8 +115,9 @@ type WorkspaceStatusMessageHandler = (message: api.che.workspace.event.Workspace
 type EnvironmentOutputMessageHandler = (message: api.che.workspace.event.RuntimeLogEvent) => void;
 const subscribedWorkspaceStatusCallbacks = new Map<string, WorkspaceStatusMessageHandler>();
 const subscribedEnvironmentOutputCallbacks = new Map<string, EnvironmentOutputMessageHandler>();
+const restartCallbacks = new Map<string, () => void>();
 
-function onStatusUpdateReceived(
+async function onStatusUpdateReceived(
   workspace: che.Workspace,
   dispatch: ThunkDispatch<State, undefined, UpdateWorkspaceStatusAction | UpdateWorkspacesLogsAction | DeleteWorkspaceLogsAction>,
   message: any) {
@@ -138,6 +141,12 @@ function onStatusUpdateReceived(
       workspaceId: workspace.id,
       status,
     });
+    // check workspaces which should be restart
+    const callback = restartCallbacks.get(workspace.id);
+    if (callback && (workspace.status === WorkspaceStatus.STOPPED || workspace.status === WorkspaceStatus.ERROR)) {
+      restartCallbacks.delete(workspace.id);
+      callback();
+    }
   }
 }
 
@@ -264,6 +273,32 @@ export const actionCreators: ActionCreators = {
       });
       throw errorMessage;
     }
+  },
+
+  restartWorkspace: (workspace: che.Workspace): AppThunk<KnownAction, Promise<void>> => async (dispatch, getState): Promise<void> => {
+    const defer: IDeferred<void> = getDefer();
+    try {
+      if (!subscribedWorkspaceStatusCallbacks.has(workspace.id)) {
+        subscribeToStatusChange(workspace, dispatch);
+      }
+      await cheWorkspaceClient.restApiClient.stop(workspace.id);
+      restartCallbacks.set(workspace.id, async () => {
+        try {
+          await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
+          defer.resolve();
+        } catch (e) {
+          defer.reject(e);
+        }
+      });
+    } catch (e) {
+      const errorMessage = `Failed to restart the workspace with ID: ${workspace.id}, reason: ` + getErrorMessage(e);
+      dispatch({
+        type: 'CHE_RECEIVE_ERROR',
+        error: errorMessage,
+      });
+      defer.reject(errorMessage);
+    }
+    return defer.promise;
   },
 
   deleteWorkspace: (workspace: che.Workspace): AppThunk<KnownAction, Promise<void>> => async (dispatch): Promise<void> => {
