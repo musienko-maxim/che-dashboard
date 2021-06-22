@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "args": "^5.0.1",
-    "node-static": "^0.7.11"
+    "node-static": "cloudhead/node-static#commit=351a54b018d68ca0839614bc7fe0e1b31de5d81e"
   },
   "devDependencies": {
     "@types/args": "^3.0.0",

@@ -40,6 +40,11 @@ const rewriteRules = prepareRewriteRules(flags.rewriteRule);
 
 var fileServer = new nodeStatic.Server(publicFolder, {
   indexFile: 'index.html',
+  cache: {
+    '/dashboard/': 0,
+    '**/index.html': 0,
+    '**/*': 24 * 60 * 60,
+  } as any,
 });
 
 const startupMessage1 = `I'll serve "${publicFolder}" on "${hostname}:${port}"`;
@@ -56,7 +61,7 @@ http.createServer((request, response) => {
         return;
       }
       const error = e as ResponseError;
-      
+
       if (error.status === 404 && request.url) {
         if (rewriteRules[request.url]) {
           const fileToServe = addIndexFile(rewriteRules[request.url]);
