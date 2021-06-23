@@ -143,7 +143,7 @@ async function onStatusUpdateReceived(
     });
     // check workspaces which should be restart
     const callback = restartCallbacks.get(workspace.id);
-    if (callback && (workspace.status === WorkspaceStatus.STOPPED || workspace.status === WorkspaceStatus.ERROR)) {
+    if (callback && (status === WorkspaceStatus.STOPPED || status === WorkspaceStatus.ERROR)) {
       restartCallbacks.delete(workspace.id);
       callback();
     }
@@ -277,26 +277,24 @@ export const actionCreators: ActionCreators = {
 
   restartWorkspace: (workspace: che.Workspace): AppThunk<KnownAction, Promise<void>> => async (dispatch, getState): Promise<void> => {
     const defer: IDeferred<void> = getDefer();
-    try {
-      if (!subscribedWorkspaceStatusCallbacks.has(workspace.id)) {
-        subscribeToStatusChange(workspace, dispatch);
+    const startWorkspaceCallback = async () => {
+      try {
+        await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
+        defer.resolve();
+      } catch (e) {
+        defer.reject(e);
       }
-      await cheWorkspaceClient.restApiClient.stop(workspace.id);
-      restartCallbacks.set(workspace.id, async () => {
-        try {
-          await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
-          defer.resolve();
-        } catch (e) {
-          defer.reject(e);
-        }
-      });
-    } catch (e) {
-      const errorMessage = `Failed to restart the workspace with ID: ${workspace.id}, reason: ` + getErrorMessage(e);
-      dispatch({
-        type: 'CHE_RECEIVE_ERROR',
-        error: errorMessage,
-      });
-      defer.reject(errorMessage);
+    };
+    if (workspace.status === WorkspaceStatus.STOPPED) {
+      await startWorkspaceCallback();
+    } else {
+      subscribeToStatusChange(workspace, dispatch);
+      try {
+        await actionCreators.stopWorkspace(workspace)(dispatch, getState, undefined);
+      } catch (error) {
+        defer.reject(error);
+      }
+      restartCallbacks.set(workspace.id, startWorkspaceCallback);
     }
     return defer.promise;
   },

@@ -48,6 +48,7 @@ type State = {
   preselectedTabKey?: IdeLoaderTab;
   ideUrl?: string;
   hasError: boolean;
+  isWaitingForRestart: boolean;
 };
 
 class IdeLoaderContainer extends React.PureComponent<Props, State> {
@@ -85,6 +86,7 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
       workspaceName,
       hasError: workspace?.hasError === true,
       preselectedTabKey: this.preselectedTabKey,
+      isWaitingForRestart: false
     };
 
     const callback = async () => {
@@ -154,9 +156,11 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
         return;
       }
       try {
+        this.setState({ isWaitingForRestart: true });
         await this.props.restartWorkspace(workspace);
-        window.postMessage('show-navbar', '*');
+        this.setState({ isWaitingForRestart: false });
       } catch (error) {
+        this.setState({ isWaitingForRestart: false });
         this.showAlert(`Workspace ${this.state.workspaceName} failed to restart. ${error}`);
       }
     }
@@ -203,6 +207,9 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
   }
 
   public async componentDidUpdate(prevProps: Props, prevState: State): Promise<void> {
+    if (this.state.isWaitingForRestart) {
+      return;
+    }
     const { allWorkspaces, match: { params } } = this.props;
     const { hasError } = this.state;
     const workspace = allWorkspaces.find(workspace =>
@@ -238,6 +245,12 @@ class IdeLoaderContainer extends React.PureComponent<Props, State> {
     } else if (prevState.workspaceName !== this.workspaceName) {
       await this.initWorkspace();
       return;
+    } else if (prevState.isWaitingForRestart) {
+      const ideUrl = workspace.ideUrl;
+      console.log('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>', ideUrl);
+      if (ideUrl) {
+        return await this.updateIdeUrl(ideUrl);
+      }
     }
     this.checkOnStoppingStatus(workspace);
     this.debounce.setDelay(1000);

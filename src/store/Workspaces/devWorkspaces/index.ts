@@ -222,25 +222,25 @@ export const actionCreators: ActionCreators = {
 
   restartWorkspace: (workspace: IDevWorkspace): AppThunk<KnownAction, Promise<void>> => async (dispatch, getState): Promise<void> => {
     const defer: IDeferred<void> = getDefer();
-    try {
-      await devWorkspaceClient.changeWorkspaceStatus(workspace.metadata.namespace, workspace.metadata.name, false);
-      dispatch({ type: 'DELETE_DEVWORKSPACE_LOGS', workspaceId: workspace.status.devworkspaceId });
-      restartCallbacks.set(workspace.status.devworkspaceId, async () => {
-        try {
-          await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
-          defer.resolve();
-        } catch (e) {
-          defer.reject(e);
-        }
-      });
-    } catch (e) {
-      const errorMessage = `Failed to restart the workspace with ID: ${workspace.status.devworkspaceId}, reason: ` + getErrorMessage(e);
-      dispatch({
-        type: 'RECEIVE_DEVWORKSPACE_ERROR',
-        error: errorMessage,
-      });
-      defer.reject(errorMessage);
+    const startWorkspaceCallback = async () => {
+      try {
+        await actionCreators.startWorkspace(workspace)(dispatch, getState, undefined);
+        defer.resolve();
+      } catch (e) {
+        defer.reject(e);
+      }
+    };
+    if (workspace.status.phase === DevWorkspaceStatus.STOPPED) {
+      await startWorkspaceCallback();
+    } else {
+      try {
+        await actionCreators.stopWorkspace(workspace)(dispatch, getState, undefined);
+      } catch (error) {
+        defer.reject(error);
+      }
+      restartCallbacks.set(workspace.status.devworkspaceId, startWorkspaceCallback);
     }
+
     return defer.promise;
   },
 
